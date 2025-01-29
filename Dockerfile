@@ -1,7 +1,9 @@
-FROM denoland/deno:alpine
+FROM denoland/deno:ubuntu
 
 # The port that your application listens to.
 EXPOSE 8080
+# ENV LD_LIBRARY_PATH /usr/lib:/usr/local/lib
+RUN apt-get update && apt-get -y install ffmpeg ca-certificates
 
 WORKDIR /app
 
@@ -16,8 +18,7 @@ RUN cp youtubeuploader /app/youtubeuploader
 WORKDIR /app
 
 # Prefer not to run as root.
-COPY ./deno.json .
-COPY ./deno.lock .
+COPY ./deno.json ./deno.lock ./package.json ./package-lock.json ./
 RUN deno install
 # These steps will be re-run upon each file change in your working directory:
 COPY ./src ./src

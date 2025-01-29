@@ -1,56 +1,80 @@
-import { walk } from "@std/fs";
-import { copy, readerFromStreamReader } from "@std/io";
+import { walk, existsSync } from "@std/fs";
+import { TZDate } from "@date-fns/tz";
+import { formatISO } from "date-fns";
 
 function truncateString(str: string, maxLength: number = 100) {
-  if (str.length + 31 > maxLength) {
-    return str.slice(0, maxLength - 3 - 31 - 1) + "...";
+  if (str.length + 33 > maxLength) {
+    return str.slice(0, maxLength - 33 - 3) + "...";
   }
   return str;
 }
 
-type videoInfo = {
-  title: string;
-  description: string;
-};
+async function makeThumbnail(text: string, path: string, outputPath: string) {
+  console.log("creating thumbnail", text, path, outputPath);
+  const command = new Deno.Command("ffmpeg", {
+    args: [
+      "-y",
+      `-i`, path,
+      `-vf`, `drawtext=text='${text}':fontcolor=white:fontsize=200:x=10:y=h-th-10:box=1:boxcolor=black@0.75:boxborderw=20:`,
+      outputPath
+    ]
+  });
+  const process = command.spawn();
+  const { success, code, signal } = await process.status;
 
-async function uploadVideo(videoInfo: videoInfo) {
+  console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
+}
+
+async function upload(videoInfo: { title: string; description: string; videoPath: string; thumbnailPath: string; }) {
+  console.log("uploading video");
+  const command = new Deno.Command("/app/youtubeuploader", {
+    args: [
+      `-filename`, videoInfo.videoPath,
+      `-title`, videoInfo.title,
+      `-description`, `${videoInfo.description}`,
+      `-thumbnail`, `${videoInfo.thumbnailPath}`,
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const process = command.spawn();
+
+  process.stdout.pipeTo(Deno.stdout.writable, { preventClose: true, preventCancel: true, preventAbort: true });
+  process.stderr.pipeTo(Deno.stderr.writable, { preventClose: true, preventCancel: true, preventAbort: true });
+  const { success, code, signal } = await process.status;
+
+  console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
+}
+
+async function uploadVideo() {
   const dirs = walk("/vods");
 
   for await (const file of dirs) {
     if (
-      file.isFile && file.name.endsWith(".mp4")
+      file.isFile && file.name.endsWith("info.json")
     ) {
-      console.log(file.isFile, file.name);
-      const command = new Deno.Command("/app/youtubeuploader", {
-        args: [
-          `-filename`, file.path,
-          `-title`, videoInfo.title,
-          `-description`, `${videoInfo.description}${file.name.replace("-video.mp4", "")}`,
-        ],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      const process = command.spawn();
-      
-      process.stdout.pipeTo(Deno.stdout.writable, { preventClose: true, preventCancel: true, preventAbort: true});
-      process.stderr.pipeTo(Deno.stderr.writable, { preventClose: true, preventCancel: true, preventAbort: true});
-      const { success, code, signal } = await process.status;
+      const data = JSON.parse(Deno.readTextFileSync(file.path));
+      const date = formatISO(new TZDate(data.started_at, "America/Los_Angeles"), { representation: "date" })
+      data.title = data.title.replaceAll("<", "＜").replaceAll(">", "＞");
+      const videoPath = file.path.replace("-info.json", "-video.mp4");
+      const thumbnailPath = file.path.replace("-info.json", "-thumbnail.jpg");
+      const newThumbnailPath = file.path.replace("-info.json", "-thumbnail-new.jpg");
+      const videoFileExists = existsSync(videoPath, { isFile: true });
+      console.assert(videoFileExists, "video file does not exist");
+      const title = `[${date}] ${truncateString(data.title)} [FUSLIE TWITCH VOD]`;
+      const description = `Recording of the twitch stream for the original experience\n${data.title}\nVOD id: ${data.id}`;
+      const videoInfo = { title, description, videoPath, thumbnailPath: newThumbnailPath };
+      if (videoFileExists) {
+        console.log(videoInfo);
+        await makeThumbnail(date, thumbnailPath, newThumbnailPath);
+        await upload(videoInfo);
+      }
 
-      console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
-      // copy(readerFromStreamReader(child.stdout.getReader()), Deno.stdout);
-
-      // create subprocess and collect output
-      // const { code, stdout, stderr } = await command.output();
-
-      // console.assert(code === 0);
-      // console.log(new TextDecoder().decode(stdout));
-      // console.log(new TextDecoder().decode(stderr));
-      // console.log(file.isFile, file.name);
     }
   }
 }
 
-Deno.serve({ port: 8080 }, async (req) => {
+Deno.serve({ port: 8080 }, (req) => {
   console.log("Method:", req.method);
 
   const url = new URL(req.url);
@@ -61,18 +85,10 @@ Deno.serve({ port: 8080 }, async (req) => {
 
   if (req.body) {
 
-    const body = await req.json();
-    console.log(body);
-    const data = JSON.parse(body.body);
-    data.title = data.title.replaceAll("<", "＜").replaceAll(">", "＞");
-    const title = `[${data.date.slice(0, 10)}] ${truncateString(data.title)
-      } [FUSLIE TWITCH VOD]`;
-    const description =
-      `Recording of the twitch stream for the original experience\n${data.title}\nVOD id: `;
-    const videoInfo = { title, description };
-    console.log(videoInfo);
-    uploadVideo(videoInfo);
+    uploadVideo();
   }
 
   return new Response("Hello, World!");
 });
+
+

@@ -6,6 +6,8 @@
     "jsx": "react",
     "strictNullChecks": true,
     "strictFunctionTypes": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "sourceMap": true
   },
   "exclude": [
