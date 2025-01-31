@@ -3,14 +3,18 @@
   "specifiers": {
     "jsr:@std/assert@1": "1.0.11",
     "jsr:@std/bytes@^1.0.4": "1.0.4",
+    "jsr:@std/cli@^1.0.11": "1.0.11",
     "jsr:@std/datetime@~0.225.3": "0.225.3",
+    "jsr:@std/fmt@^1.0.4": "1.0.4",
     "jsr:@std/fs@^1.0.10": "1.0.10",
     "jsr:@std/internal@^1.0.5": "1.0.5",
     "jsr:@std/io@*": "0.225.1",
     "jsr:@std/io@~0.225.1": "0.225.1",
     "jsr:@std/path@^1.0.8": "1.0.8",
     "npm:@date-fns/tz@^1.2.0": "1.2.0",
-    "npm:date-fns@^4.1.0": "4.1.0"
+    "npm:date-fns@^4.1.0": "4.1.0",
+    "npm:fetch-cookie@^3.1.0": "3.1.0",
+    "npm:tough-cookie@^5.1.0": "5.1.0"
   },
   "jsr": {
     "@std/assert@1.0.11": {
@@ -22,8 +26,14 @@
     "@std/bytes@1.0.4": {
       "integrity": "11a0debe522707c95c7b7ef89b478c13fb1583a7cfb9a85674cd2cc2e3a28abc"
     },
+    "@std/cli@1.0.11": {
+      "integrity": "ec219619fdcd31bcf0d8e53bee1e2706ec9a02f70255365a094f69755dadd340"
+    },
     "@std/datetime@0.225.3": {
       "integrity": "fda0b7791b43d9a46764986fec39922a8ceb70ffca642651fa7d0683501a171a"
+    },
+    "@std/fmt@1.0.4": {
+      "integrity": "e14fe5bedee26f80877e6705a97a79c7eed599e81bb1669127ef9e8bc1e29a74"
     },
     "@std/fs@1.0.10": {
       "integrity": "bf041f9d7a0a460817f0421be8946d0e06011b3433e6c83a215628de5e3c7c2c",
@@ -50,19 +60,48 @@
     },
     "date-fns@4.1.0": {
       "integrity": "sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg=="
+    },
+    "fetch-cookie@3.1.0": {
+      "integrity": "sha512-s/XhhreJpqH0ftkGVcQt8JE9bqk+zRn4jF5mPJXWZeQMCI5odV9K+wEWYbnzFPHgQZlvPSMjS4n4yawWE8RINw==",
+      "dependencies": [
+        "set-cookie-parser",
+        "tough-cookie"
+      ]
+    },
+    "set-cookie-parser@2.7.1": {
+      "integrity": "sha512-IOc8uWeOZgnb3ptbCURJWNjWUPcO3ZnTTdzsurqERrP6nPyv+paC55vJM0LpOlT2ne+Ix+9+CRG1MNLlyZ4GjQ=="
+    },
+    "tldts-core@6.1.75": {
+      "integrity": "sha512-AOvV5YYIAFFBfransBzSTyztkc3IMfz5Eq3YluaRiEu55nn43Fzaufx70UqEKYr8BoLCach4q8g/bg6e5+/aFw=="
+    },
+    "tldts@6.1.75": {
+      "integrity": "sha512-+lFzEXhpl7JXgWYaXcB6DqTYXbUArvrWAE/5ioq/X3CdWLbDjpPP4XTrQBmEJ91y3xbe4Fkw7Lxv4P3GWeJaNg==",
+      "dependencies": [
+        "tldts-core"
+      ]
+    },
+    "tough-cookie@5.1.0": {
+      "integrity": "sha512-rvZUv+7MoBYTiDmFPBrhL7Ujx9Sk+q9wwm22x8c8T5IJaR+Wsyc7TNxbVxo84kZoRJZZMazowFLqpankBEQrGg==",
+      "dependencies": [
+        "tldts"
+      ]
     }
   },
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@1",
+      "jsr:@std/cli@^1.0.11",
       "jsr:@std/datetime@~0.225.3",
+      "jsr:@std/fmt@^1.0.4",
       "jsr:@std/fs@^1.0.10",
       "jsr:@std/io@~0.225.1"
     ],
     "packageJson": {
       "dependencies": [
         "npm:@date-fns/tz@^1.2.0",
-        "npm:date-fns@^4.1.0"
+        "npm:date-fns@^4.1.0",
+        "npm:fetch-cookie@^3.1.0",
+        "npm:tough-cookie@^5.1.0"
       ]
     }
   }

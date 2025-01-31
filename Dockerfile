@@ -11,7 +11,7 @@ ARG YOUTUBEUPLOADER_VERSION="1.24.4"
 WORKDIR /tmp
 ADD https://github.com/porjo/youtubeuploader/releases/download/v${YOUTUBEUPLOADER_VERSION}/youtubeuploader_${YOUTUBEUPLOADER_VERSION}_Linux_amd64.tar.gz youtubeuploader.tar.gz
 RUN tar -xvzf youtubeuploader.tar.gz
-RUN cp youtubeuploader /app/youtubeuploader
+RUN cp youtubeuploader /usr/bin/youtubeuploader
 # RUN rm -rf /tmp
 
 
