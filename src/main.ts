@@ -2,15 +2,11 @@ import { existsSync } from "@std/fs";
 import { assertExists } from "@std/assert";
 import { TZDate } from "@date-fns/tz";
 import { formatISO } from "date-fns";
-import makeFetchCookie from "fetch-cookie";
-import { CookieJar } from "tough-cookie";
 import { parseArgs } from "@std/cli/parse-args";
 import { bgBrightRed } from "@std/fmt/colors";
-const cookieJar = new CookieJar();
-const fetchCookie = makeFetchCookie(
-  fetch,
-  cookieJar,
-);
+import type { videoUploadInfo } from "./videoUploadInfo.ts";
+import { makeTitle } from "./makeTitle.ts";
+import { deleteVOD } from "./api.ts";
 
 const args = parseArgs<{ delete?: boolean }>(Deno.args);
 const DELETE_FLAG = Deno.env.get("DELETE_FLAG") || args.delete || false; // if enabled files uploaded will be deleted
@@ -18,76 +14,14 @@ const DELETE_FLAG = Deno.env.get("DELETE_FLAG") || args.delete || false; // if e
 DELETE_FLAG &&
   console.log(`⚠️  ⚠️  ⚠️  ${bgBrightRed("DELETE_FLAG ENABLED")} ⚠️  ⚠️  ⚠️`);
 
-const GANYMEDE_URL = Deno.env.get("GANYMEDE_URL");
-const GANYMEDE_USER = Deno.env.get("GANYMEDE_USER");
-const GANYMEDE_PASSWORD = Deno.env.get("GANYMEDE_PASSWORD");
+export const GANYMEDE_URL = Deno.env.get("GANYMEDE_URL");
+export const GANYMEDE_USER = Deno.env.get("GANYMEDE_USER");
+export const GANYMEDE_PASSWORD = Deno.env.get("GANYMEDE_PASSWORD");
+const DISCORD_WEBHOOK_URL = Deno.env.get("DISCORD_WEBHOOK_URL");
 assertExists(GANYMEDE_URL, "missing GANYMEDE_URL env");
 assertExists(GANYMEDE_USER, "missing GANYMEDE_USER env");
 assertExists(GANYMEDE_PASSWORD, "missing GANYMEDE_PASSWORD env");
-
-async function login() {
-  const url = `http://${GANYMEDE_URL}/api/v1/auth/login`;
-
-  const options = {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: `{"username":"${GANYMEDE_USER}","password":"${GANYMEDE_PASSWORD}"}`,
-  };
-
-  try {
-    await fetchCookie(url, options);
-    // const json = await res.text();
-    console.log("logged in");
-    return;
-  } catch (err) {
-    return console.error("error:" + err);
-  }
-}
-
-async function deleteVOD(id: string) {
-  await login();
-
-  const url = `http://${GANYMEDE_URL}/api/v1/vod/${id}?delete_files=true`;
-
-  const options = {
-    method: "DELETE",
-  };
-
-  try {
-    await fetchCookie(url, options);
-    // const json = await res.text();
-    console.log("deleted vod:", id);
-    return;
-  } catch (err) {
-    return console.error("error:" + err);
-  }
-}
-
-function getStrLength(str: string): number {
-  return [...new Intl.Segmenter().segment(str)].length;
-}
-
-function strSlice(str: string, to: number): string {
-  return [...new Intl.Segmenter().segment(str)].filter((x, i) => i < to).map(x => x.segment).join("");
-}
-
-function truncateString(
-  str: string,
-  channelNameLength: number,
-  maxLength: number = 100,
-) {
-  if (getStrLength(str) + (27 + channelNameLength) >= maxLength) {
-    return strSlice(str, maxLength - (27 + channelNameLength) - 3) + "...";
-  }
-  return str;
-}
-
-function makeTitle(date: string, data: { title: string; user_name: string }) {
-  return `[${date}] ${truncateString(data.title, data.user_name.length)
-    } [${data.user_name.toUpperCase()} TWITCH VOD]`;
-}
+assertExists(DISCORD_WEBHOOK_URL, "missing DISCORD_WEBHOOK_URL env");
 
 async function makeThumbnail(text: string, path: string, outputPath: string) {
   console.log("creating thumbnail", text, path, outputPath);
@@ -107,12 +41,51 @@ async function makeThumbnail(text: string, path: string, outputPath: string) {
   console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
 }
 
+function sendNotification(metaJSONoutPath: string) {
+  const metaJSONoutFileExists = existsSync(metaJSONoutPath, { isFile: true });
+  console.assert(metaJSONoutFileExists, "metaJSONout file does not exist");
+  if (!metaJSONoutFileExists) return;
+  const data: videoUploadInfo = JSON.parse(
+    Deno.readTextFileSync(metaJSONoutPath),
+  );
+  const url = DISCORD_WEBHOOK_URL!;
+  const options = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      "content": "@here, VOD uploaded successfully:",
+      "embeds": [
+        {
+          "title": data.snippet.title,
+          "description": data.snippet.description,
+          "url": `https://youtu.be/${data.id}`,
+          "color": 16711680,
+          "fields": [
+            {
+              "name": "Click here to publish video",
+              "value": `https://studio.youtube.com/video/${data.id}/edit`,
+            },
+          ],
+          "image": {
+            "url": data.snippet.thumbnails.high.url,
+          },
+        },
+      ],
+      "attachments": [],
+    }),
+  };
+  fetch(url, options);
+}
+
 async function upload(
   videoInfo: {
     title: string;
     description: string;
     videoPath: string;
     thumbnailPath: string;
+    metaJSONoutPath: string;
   },
 ) {
   console.log("uploading video");
@@ -126,6 +99,8 @@ async function upload(
       `${videoInfo.description}`,
       `-thumbnail`,
       `${videoInfo.thumbnailPath}`,
+      "-metaJSONout",
+      videoInfo.metaJSONoutPath,
     ],
     stdout: "piped",
     stderr: "piped",
@@ -162,21 +137,23 @@ async function uploadVideoWithID(channel: string, id: string) {
   const videoPath = path.replace("-info.json", "-video.mp4");
   const thumbnailPath = path.replace("-info.json", "-thumbnail.jpg");
   const newThumbnailPath = path.replace("-info.json", "-thumbnail-new.jpg");
+  const metaJSONoutPath = path.replace("-info.json", "-upload-info.json");
   const videoFileExists = existsSync(videoPath, { isFile: true });
   console.assert(videoFileExists, "video file does not exist");
   const title = makeTitle(date, data);
-  const description =
-    `Recording of the twitch stream for the original experience\n${data.title}\nVOD id: ${data.id}`;
+  const description = `Recording of the twitch stream for the original experience\n${data.title}\nVOD id: ${data.id}`;
   const videoInfo = {
     title,
     description,
     videoPath,
     thumbnailPath: newThumbnailPath,
+    metaJSONoutPath,
   };
   if (videoFileExists) {
     console.log(videoInfo);
     await makeThumbnail(date, thumbnailPath, newThumbnailPath);
     const success = await upload(videoInfo);
+    success && sendNotification(metaJSONoutPath);
     success && DELETE_FLAG && await deleteVOD(id);
   }
 }
@@ -198,4 +175,3 @@ Deno.serve({ port: 8080 }, async (req) => {
 
   return new Response("ok");
 });
-

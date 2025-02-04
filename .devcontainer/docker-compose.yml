@@ -20,6 +20,7 @@ services:
       - GANYMEDE_URL=192.168.1.10:4800
       - GANYMEDE_USER=${GANYMEDE_USER}
       - GANYMEDE_PASSWORD=${GANYMEDE_PASSWORD}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
     ports:
       - 8080:8080
     # Uncomment the next four lines if you will use a ptrace-based debugger like C++, Go, and Rust.
