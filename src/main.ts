@@ -41,7 +41,7 @@ async function makeThumbnail(text: string, path: string, outputPath: string) {
   console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
 }
 
-function sendNotification(metaJSONoutPath: string) {
+function sendSuccessNotification(metaJSONoutPath: string) {
   const metaJSONoutFileExists = existsSync(metaJSONoutPath, { isFile: true });
   console.assert(metaJSONoutFileExists, "metaJSONout file does not exist");
   if (!metaJSONoutFileExists) return;
@@ -61,7 +61,7 @@ function sendNotification(metaJSONoutPath: string) {
           "title": data.snippet.title,
           "description": data.snippet.description,
           "url": `https://youtu.be/${data.id}`,
-          "color": 16711680,
+          "color": 4961603,
           "fields": [
             {
               "name": "Click here to publish video",
@@ -73,13 +73,35 @@ function sendNotification(metaJSONoutPath: string) {
           },
         },
       ],
-      "attachments": [],
     }),
   };
   fetch(url, options);
 }
 
-async function upload(
+function sendErrorNotification(errorMessage: string) {
+  const url = DISCORD_WEBHOOK_URL!;
+  const options = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      "content": "@here ⚠️",
+      "embeds": [
+        {
+          "id": 740234584,
+          "title": "⚠️  ERROR UPLOADING VOD ⚠️",
+          "description": `\`\`\`${errorMessage}\`\`\``,
+          "color": 16711680,
+          "fields": [],
+        },
+      ],
+    }),
+  };
+  fetch(url, options);
+}
+
+function upload(
   videoInfo: {
     title: string;
     description: string;
@@ -102,25 +124,29 @@ async function upload(
       "-metaJSONout",
       videoInfo.metaJSONoutPath,
     ],
-    stdout: "piped",
-    stderr: "piped",
   });
-  const process = command.spawn();
-
-  process.stdout.pipeTo(Deno.stdout.writable, {
-    preventClose: true,
-    preventCancel: true,
-    preventAbort: true,
-  });
-  process.stderr.pipeTo(Deno.stderr.writable, {
-    preventClose: true,
-    preventCancel: true,
-    preventAbort: true,
-  });
-  const { success, code, signal } = await process.status;
-
+  // const process = command.spawn();
+  // process.stdout.pipeTo(Deno.stdout.writable, {
+  //   preventClose: true,
+  //   preventCancel: true,
+  //   preventAbort: true,
+  // });
+  // process.stdout.pipeTo(
+  //   Deno.openSync(videoInfo.videoPath + "youtubeuploader-output", { create: true, write: true }).writable,
+  // );
+  // process.stderr.pipeTo(
+  //   Deno.openSync(videoInfo.videoPath + "youtubeuploader-error", { create: true, write: true }).writable,
+  // );
+  // process.stderr.pipeTo(Deno.stderr.writable, {
+  //   preventClose: true,
+  //   preventCancel: true,
+  //   preventAbort: true,
+  // });
+  const { success, code, signal, stderr, stdout } = command.outputSync();
+  console.log(new TextDecoder().decode(stdout));
+  console.log(new TextDecoder().decode(stderr));
   console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
-  return success;
+  return success ? true : new TextDecoder().decode(stderr);
 }
 
 async function uploadVideoWithID(channel: string, id: string) {
@@ -152,9 +178,9 @@ async function uploadVideoWithID(channel: string, id: string) {
   if (videoFileExists) {
     console.log(videoInfo);
     await makeThumbnail(date, thumbnailPath, newThumbnailPath);
-    const success = await upload(videoInfo);
-    success && sendNotification(metaJSONoutPath);
-    success && DELETE_FLAG && await deleteVOD(id);
+    const successOrErrorMessage = upload(videoInfo);
+    successOrErrorMessage === true ? sendSuccessNotification(metaJSONoutPath) : sendErrorNotification(successOrErrorMessage);
+    successOrErrorMessage && DELETE_FLAG && await deleteVOD(id);
   }
 }
 
