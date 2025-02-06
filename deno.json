@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "dev": "deno run -A  --watch ./src/main.ts",
+    "dev": "deno run -A  --watch --check ./src/main.ts",
     "build": "deno compile -A --output ./build/main ./src/main.ts"
   },
   "nodeModulesDir": "auto",

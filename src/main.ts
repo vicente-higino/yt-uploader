@@ -24,6 +24,17 @@ assertExists(GANYMEDE_PASSWORD, "missing GANYMEDE_PASSWORD env");
 assertExists(DISCORD_WEBHOOK_URL, "missing DISCORD_WEBHOOK_URL env");
 
 async function makeThumbnail(text: string, path: string, outputPath: string) {
+  console.log("waiting for thumbnail to update... ⏳");
+  const watcher = Deno.watchFs(path);
+  const timeoutID = setTimeout(() => {
+    watcher.close();
+  }, 60000);
+  for await (const event of watcher) { // waiting for thumbnail to update before creating new thumbnail
+    if (event.kind == "modify") {
+      watcher.close();
+      clearTimeout(timeoutID);
+    }
+  }
   console.log("creating thumbnail", text, path, outputPath);
   const command = new Deno.Command("ffmpeg", {
     args: [
@@ -31,7 +42,7 @@ async function makeThumbnail(text: string, path: string, outputPath: string) {
       `-i`,
       path,
       `-vf`,
-      `drawtext=text='${text}':fontcolor=white:fontsize=200:x=10:y=h-th-10:box=1:boxcolor=black@0.75:boxborderw=20:`,
+      `drawtext=text='${text}':fontcolor=white:fontsize=200:x=50:y=h-th-50:box=1:boxcolor=black@0.75:boxborderw=20:`,
       outputPath,
     ],
   });
@@ -125,23 +136,6 @@ function upload(
       videoInfo.metaJSONoutPath,
     ],
   });
-  // const process = command.spawn();
-  // process.stdout.pipeTo(Deno.stdout.writable, {
-  //   preventClose: true,
-  //   preventCancel: true,
-  //   preventAbort: true,
-  // });
-  // process.stdout.pipeTo(
-  //   Deno.openSync(videoInfo.videoPath + "youtubeuploader-output", { create: true, write: true }).writable,
-  // );
-  // process.stderr.pipeTo(
-  //   Deno.openSync(videoInfo.videoPath + "youtubeuploader-error", { create: true, write: true }).writable,
-  // );
-  // process.stderr.pipeTo(Deno.stderr.writable, {
-  //   preventClose: true,
-  //   preventCancel: true,
-  //   preventAbort: true,
-  // });
   const { success, code, signal, stderr, stdout } = command.outputSync();
   console.log(new TextDecoder().decode(stdout));
   console.log(new TextDecoder().decode(stderr));
@@ -179,7 +173,9 @@ async function uploadVideoWithID(channel: string, id: string) {
     console.log(videoInfo);
     await makeThumbnail(date, thumbnailPath, newThumbnailPath);
     const successOrErrorMessage = upload(videoInfo);
-    successOrErrorMessage === true ? sendSuccessNotification(metaJSONoutPath) : sendErrorNotification(successOrErrorMessage);
+    successOrErrorMessage === true
+      ? sendSuccessNotification(metaJSONoutPath)
+      : sendErrorNotification(successOrErrorMessage);
     successOrErrorMessage && DELETE_FLAG && await deleteVOD(id);
   }
 }
