@@ -17,12 +17,20 @@ services:
       - /home/vicente/vods/vods:/vods
       - ../secret:/root/.config/youtubeuploader
     environment:
+      - DENO_ENV=DEV
       - GANYMEDE_URL=192.168.1.10:4800
       - GANYMEDE_USER=${GANYMEDE_USER}
       - GANYMEDE_PASSWORD=${GANYMEDE_PASSWORD}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - CLIENT_ID=${CLIENT_ID}
+      - CLIENT_SECRET=${CLIENT_SECRET}
+      - REVERSEPROXY_URL=${REVERSEPROXY_URL}
+      - REVERSEPROXY_PORT=${REVERSEPROXY_PORT}
+      - REVERSEPROXY_SECRET=${REVERSEPROXY_SECRET}
+      - NGROK_AUTH_TOKEN=${NGROK_AUTH_TOKEN}
     ports:
       - 8080:8080
+      - 4803:${REVERSEPROXY_PORT}
     # Uncomment the next four lines if you will use a ptrace-based debugger like C++, Go, and Rust.
     # cap_add:
     #   - SYS_PTRACE

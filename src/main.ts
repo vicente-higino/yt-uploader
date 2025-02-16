@@ -1,40 +1,35 @@
-import { existsSync } from "@std/fs";
-import { assertExists } from "@std/assert";
 import { TZDate } from "@date-fns/tz";
+import { makeTimestampsHandler } from "@scope/make-timespamps";
+import { exists } from "@std/fs";
 import { formatISO } from "date-fns";
-import { parseArgs } from "@std/cli/parse-args";
-import { bgBrightRed } from "@std/fmt/colors";
-import type { videoUploadInfo } from "./videoUploadInfo.ts";
+import { z } from "zod";
+import { deleteVOD, login } from "./api.ts";
 import { makeTitle } from "./makeTitle.ts";
-import { deleteVOD } from "./api.ts";
+import type { videoUploadInfo } from "./videoUploadInfo.ts";
+import { DELETE_FLAG, DISCORD_WEBHOOK_URL } from "./env.ts";
 
-const args = parseArgs<{ delete?: boolean }>(Deno.args);
-const DELETE_FLAG = Deno.env.get("DELETE_FLAG") || args.delete || false; // if enabled files uploaded will be deleted
-
-DELETE_FLAG &&
-  console.log(`⚠️  ⚠️  ⚠️  ${bgBrightRed("DELETE_FLAG ENABLED")} ⚠️  ⚠️  ⚠️`);
-
-export const GANYMEDE_URL = Deno.env.get("GANYMEDE_URL");
-export const GANYMEDE_USER = Deno.env.get("GANYMEDE_USER");
-export const GANYMEDE_PASSWORD = Deno.env.get("GANYMEDE_PASSWORD");
-const DISCORD_WEBHOOK_URL = Deno.env.get("DISCORD_WEBHOOK_URL");
-assertExists(GANYMEDE_URL, "missing GANYMEDE_URL env");
-assertExists(GANYMEDE_USER, "missing GANYMEDE_USER env");
-assertExists(GANYMEDE_PASSWORD, "missing GANYMEDE_PASSWORD env");
-assertExists(DISCORD_WEBHOOK_URL, "missing DISCORD_WEBHOOK_URL env");
-
-async function makeThumbnail(text: string, path: string, outputPath: string) {
-  console.log("waiting for thumbnail to update... ⏳");
+async function waitForFile(
+  path: string,
+  file: string,
+  kind: "any" | "access" | "create" | "modify" | "rename" | "remove" | "other",
+  timeout = 60000,
+) {
+  console.log("Waiting for file: ", path, kind, timeout);
   const watcher = Deno.watchFs(path);
   const timeoutID = setTimeout(() => {
     watcher.close();
-  }, 60000);
-  for await (const event of watcher) { // waiting for thumbnail to update before creating new thumbnail
-    if (event.kind == "modify") {
+  }, timeout);
+  for await (const event of watcher) {
+    if (event.kind == kind && (new Set(event.paths)).has(file)) {
       watcher.close();
       clearTimeout(timeoutID);
     }
   }
+}
+
+async function makeThumbnail(text: string, path: string, outputPath: string) {
+  console.log("waiting for thumbnail to update... ⏳");
+  await waitForFile(path, path, "modify");
   console.log("creating thumbnail", text, path, outputPath);
   const command = new Deno.Command("ffmpeg", {
     args: [
@@ -52,13 +47,13 @@ async function makeThumbnail(text: string, path: string, outputPath: string) {
   console.log(`done! success: ${success} code: ${code} signal: ${signal}`);
 }
 
-function sendSuccessNotification(metaJSONoutPath: string) {
-  const metaJSONoutFileExists = existsSync(metaJSONoutPath, { isFile: true });
+async function sendSuccessNotification(metaJSONoutPath: string) {
+  const metaJSONoutFileExists = await exists(metaJSONoutPath, { isFile: true });
   console.assert(metaJSONoutFileExists, "metaJSONout file does not exist");
   if (!metaJSONoutFileExists) return;
-  const data: videoUploadInfo = JSON.parse(
-    Deno.readTextFileSync(metaJSONoutPath),
-  );
+  const data = z.custom<videoUploadInfo>().parse(JSON.parse(
+    await Deno.readTextFile(metaJSONoutPath),
+  ));
   const url = DISCORD_WEBHOOK_URL!;
   const options = {
     method: "POST",
@@ -143,25 +138,47 @@ function upload(
   return success ? true : new TextDecoder().decode(stderr);
 }
 
-async function uploadVideoWithID(channel: string, id: string) {
-  const path = `/vods/${channel}/${id}/${id}-info.json`;
-  console.log(path);
-  const infoFileExists = existsSync(path, { isFile: true });
+const infoFile = z.object({
+  id: z.string(),
+  user_name: z.string(),
+  started_at: z.string().datetime(),
+  title: z.string(),
+});
+
+function sanitizeString(str: string): string {
+  return str.replaceAll("<", "＜").replaceAll(">", "＞");
+}
+
+async function uploadVideoWithID({ channel, id }: requestData) {
+  const folderPath = `/vods/${channel}/${id}`;
+  const infoFilePath = `${folderPath}/${id}-info.json`;
+  const videoPath = `${folderPath}/${id}-video.mp4`;
+  const thumbnailPath = `${folderPath}/${id}-thumbnail.jpg`;
+  const newThumbnailPath = `${folderPath}/${id}-thumbnail-new.jpg`;
+  const metaJSONoutPath = `${folderPath}/${id}-upload-info.json`;
+  const timestampPath = `${folderPath}/${id}-timestamps.txt`;
+  console.log(infoFilePath);
+  const infoFileExists = await exists(infoFilePath, { isFile: true });
   console.assert(infoFileExists, "info file does not exist");
   if (!infoFileExists) return;
-  const data = JSON.parse(Deno.readTextFileSync(path));
-  const date = formatISO(new TZDate(data.started_at, "America/Los_Angeles"), {
+  const { success, data: infoFileData } = infoFile.safeParse(JSON.parse(await Deno.readTextFile(infoFilePath)));
+  if (!success) return;
+  const date = formatISO(new TZDate(infoFileData.started_at, "America/Los_Angeles"), {
     representation: "date",
   });
-  data.title = data.title.replaceAll("<", "＜").replaceAll(">", "＞");
-  const videoPath = path.replace("-info.json", "-video.mp4");
-  const thumbnailPath = path.replace("-info.json", "-thumbnail.jpg");
-  const newThumbnailPath = path.replace("-info.json", "-thumbnail-new.jpg");
-  const metaJSONoutPath = path.replace("-info.json", "-upload-info.json");
-  const videoFileExists = existsSync(videoPath, { isFile: true });
+  infoFileData.title = sanitizeString(infoFileData.title);
+  await waitForFile(folderPath, timestampPath, "create");
+  const timespampsFileExists = await exists(timestampPath, { isFile: true });
+  console.assert(timespampsFileExists, "timespamps file does not exist");
+  const timespamps = timespampsFileExists ? sanitizeString(await Deno.readTextFile(timestampPath)) : "";
+  const videoFileExists = await exists(videoPath, { isFile: true });
   console.assert(videoFileExists, "video file does not exist");
-  const title = makeTitle(date, data);
-  const description = `Recording of the twitch stream for the original experience\n${data.title}\nVOD id: ${data.id}`;
+  const title = makeTitle(date, infoFileData);
+  // deno-fmt-ignore
+  const description = `Recording of the twitch stream for the original experience\n` + 
+                      `${infoFileData.title}\n`                                      + 
+                      `\n${timespamps}\n`                                            + 
+                      `VOD id: ${infoFileData.id}`;
   const videoInfo = {
     title,
     description,
@@ -176,13 +193,28 @@ async function uploadVideoWithID(channel: string, id: string) {
     successOrErrorMessage === true
       ? sendSuccessNotification(metaJSONoutPath)
       : sendErrorNotification(successOrErrorMessage);
-    successOrErrorMessage && DELETE_FLAG && await deleteVOD(id);
+    successOrErrorMessage === true && DELETE_FLAG && await deleteVOD(id);
   }
 }
 
+const requestBody = z.object({
+  body: z.string().transform((str) => {
+    return z.object({
+      channel: z.string().min(3).toLowerCase(),
+      channelID: z.string().refine((str) => z.coerce.number().safeParse(str).success),
+      id: z.string().uuid(),
+      queueId: z.string().uuid(),
+    }).parse(JSON.parse(str));
+  }),
+});
+
+export type requestData = z.infer<typeof requestBody.shape.body>;
+
+login();
+setInterval(login, 24 * 60 * 60 * 1000);
+
 Deno.serve({ port: 8080 }, async (req) => {
   console.log("Method:", req.method);
-
   const url = new URL(req.url);
   console.log("Path:", url.pathname);
   console.log("Query parameters:", url.searchParams);
@@ -191,9 +223,14 @@ Deno.serve({ port: 8080 }, async (req) => {
 
   if (req.body) {
     const body = await req.json();
-    const data = JSON.parse(body.body);
-    uploadVideoWithID(data.channel.toLowerCase(), data.id);
-  }
+    console.log(body);
 
+    const { success, data } = requestBody.safeParse(body);
+    if (success) {
+      console.log(data);
+      makeTimestampsHandler(url.pathname, data.body);
+      if (url.pathname == "/offline") uploadVideoWithID(data.body);
+    }
+  }
   return new Response("ok");
 });

@@ -3,6 +3,7 @@
     "@date-fns/tz": "^1.2.0",
     "date-fns": "^4.1.0",
     "fetch-cookie": "^3.1.0",
-    "tough-cookie": "^5.1.0"
+    "tough-cookie": "^5.1.0",
+    "zod": "^3.24.2"
   }
 }

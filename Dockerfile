@@ -1,12 +1,13 @@
 FROM denoland/deno:alpine AS build
 
-WORKDIR /app
 
+WORKDIR /app
 # Prefer not to run as root.
-COPY ./deno.json ./deno.lock ./package.json ./package-lock.json ./
-RUN deno install
+# COPY ./deno.json ./deno.lock ./package.json ./package-lock.json ./
+
+# RUN deno install
 # These steps will be re-run upon each file change in your working directory:
-COPY ./src ./src
+COPY . .
 # Compile the main app so that it doesn't need to be compiled each startup/entry.
 RUN deno task build
 
