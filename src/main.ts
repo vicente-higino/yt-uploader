@@ -14,7 +14,7 @@ async function waitForFile(
   kind: "any" | "access" | "create" | "modify" | "rename" | "remove" | "other",
   timeout = 60000,
 ) {
-  console.log("Waiting for file: ", path, kind, timeout);
+  console.log("Waiting for file: ", file, kind, timeout);
   const watcher = Deno.watchFs(path);
   const timeoutID = setTimeout(() => {
     watcher.close();
@@ -29,7 +29,7 @@ async function waitForFile(
 
 async function makeThumbnail(text: string, path: string, outputPath: string) {
   console.log("waiting for thumbnail to update... ⏳");
-  await waitForFile(path, path, "modify");
+  await waitForFile(path, path, "modify", 10000);
   console.log("creating thumbnail", text, path, outputPath);
   const command = new Deno.Command("ffmpeg", {
     args: [
@@ -37,7 +37,7 @@ async function makeThumbnail(text: string, path: string, outputPath: string) {
       `-i`,
       path,
       `-vf`,
-      `drawtext=text='${text}':fontcolor=white:fontsize=200:x=50:y=h-th-50:box=1:boxcolor=black@0.75:boxborderw=20:`,
+      `drawtext=text='${text}':fontcolor=white:fontsize=(h/5.4):x=50:y=h-th-50:box=1:boxcolor=black@0.75:boxborderw=20:`,
       outputPath,
     ],
   });
@@ -167,8 +167,8 @@ async function uploadVideoWithID({ channel, id }: requestData) {
     representation: "date",
   });
   infoFileData.title = sanitizeString(infoFileData.title);
-  await waitForFile(folderPath, timestampPath, "create");
   const timespampsFileExists = await exists(timestampPath, { isFile: true });
+  !timespampsFileExists && await waitForFile(folderPath, timestampPath, "create", 5000);
   console.assert(timespampsFileExists, "timespamps file does not exist");
   const timespamps = timespampsFileExists ? sanitizeString(await Deno.readTextFile(timestampPath)) : "";
   const videoFileExists = await exists(videoPath, { isFile: true });
