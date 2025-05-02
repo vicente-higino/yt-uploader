@@ -10,11 +10,12 @@ function strSlice(str: string, to: number): string {
 
 function truncateString(
   str: string,
-  channelNameLength: number,
-  maxLength: number = 100,
+  maxLength: number, // Now represents max length for this specific string
 ) {
-  if (getStrLength(str) + (27 + channelNameLength) >= maxLength) {
-    return strSlice(str, maxLength - (27 + channelNameLength) - 3) + "...";
+  const currentLength = getStrLength(str);
+  if (currentLength > maxLength) {
+    // Keep 3 characters for "..."
+    return strSlice(str, Math.max(0, maxLength - 3)) + "...";
   }
   return str;
 }
@@ -22,6 +23,23 @@ function truncateString(
 export function makeTitle(
   date: string,
   data: { title: string; user_name: string },
+  partNumber?: number, // Add optional partNumber
+  totalMaxLength: number = 100, // Define total max length
 ) {
-  return `[${date}] ${truncateString(data.title, data.user_name.length)} [${data.user_name.toUpperCase()} TWITCH VOD]`;
+  const datePrefix = `[${date}] `;
+  const suffix = ` [${data.user_name.toUpperCase()} TWITCH VOD]`;
+  let partString = "";
+  let partLength = 0;
+
+  if (partNumber && partNumber > 1) {
+    partString = `PART ${partNumber} - `;
+    partLength = getStrLength(partString);
+  }
+
+  const fixedLength = getStrLength(datePrefix) + getStrLength(suffix) + partLength;
+  const availableTitleLength = Math.max(0, totalMaxLength - fixedLength);
+
+  const truncatedTitle = truncateString(data.title, availableTitleLength);
+
+  return `${datePrefix}${partString}${truncatedTitle}${suffix}`;
 }

@@ -149,7 +149,66 @@ function sanitizeString(str: string): string {
   return str.replaceAll("<", "＜").replaceAll(">", "＞");
 }
 
-async function uploadVideoWithID({ channel, id }: requestData) {
+interface VideoStreamInfo {
+  startTime: Date;
+  id: string;
+  uniqueKey: string; // Add a unique key combining ID and start time
+}
+
+interface ChannelTrackingInfo {
+  recentStreams: VideoStreamInfo[];
+}
+
+const videoTracking: Record<string, ChannelTrackingInfo> = {}; // Keyed by channelID
+
+function trackLiveStream(data: requestData) {
+  const { id, channelID } = data;
+
+  try {
+    // Use current timestamp instead of reading from the info file
+    const currentTime = new Date();
+    const startTimeMs = currentTime.getTime();
+    const uniqueKey = `${id}_${startTimeMs}`;
+
+    // Initialize tracking for this channel if it doesn't exist
+    const trackingInfo = videoTracking[channelID] ??= { recentStreams: [] };
+
+    // Check if we already have this stream ID tracked (we still need this check)
+    const existingIndex = trackingInfo.recentStreams.findIndex(
+      (stream) => stream.id === id && Math.abs(stream.startTime.getTime() - startTimeMs) < 60000, // Allow 1 minute difference
+    );
+
+    if (existingIndex >= 0) {
+      console.log(`Stream ${id} already tracked with similar timestamp, skipping`);
+      return;
+    }
+
+    // Add this stream to the tracking with the unique key based on current time
+    trackingInfo.recentStreams.push({
+      startTime: currentTime,
+      id,
+      uniqueKey,
+    });
+
+    // Sort all recent streams by start time
+    trackingInfo.recentStreams.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+    // Clean up old streams (older than 16 hours)
+    const sixteenHoursAgo = new Date(Date.now() - 16 * 60 * 60 * 1000);
+    trackingInfo.recentStreams = trackingInfo.recentStreams.filter(
+      (stream) => stream.startTime > sixteenHoursAgo,
+    );
+
+    console.log(
+      `Stream ${id} added to tracking at ${currentTime.toISOString()}. Current streams for channel ${channelID}:`,
+      trackingInfo.recentStreams.map((s) => ({ id: s.id, startTime: s.startTime.toISOString() })),
+    );
+  } catch (error) {
+    console.error(`Error tracking stream ${id}:`, error);
+  }
+}
+
+async function uploadVideoWithID({ channel, id, channelID }: requestData) {
   const folderPath = `/vods/${channel}/${id}`;
   const infoFilePath = `${folderPath}/${id}-info.json`;
   const videoPath = `${folderPath}/${id}-video.mp4`;
@@ -163,24 +222,72 @@ async function uploadVideoWithID({ channel, id }: requestData) {
   if (!infoFileExists) return;
   const { success, data: infoFileData } = infoFile.safeParse(JSON.parse(await Deno.readTextFile(infoFilePath)));
   if (!success) return;
-  const date = formatISO(new TZDate(infoFileData.started_at, "America/Los_Angeles"), {
+
+  const startTime = new TZDate(infoFileData.started_at, "America/Los_Angeles");
+  const date = formatISO(startTime, {
     representation: "date",
   });
   infoFileData.title = sanitizeString(infoFileData.title);
+
+  // --- Modified Part Tracking Logic ---
+  // Get the tracking info but don't add the stream here (it should have been added in /live)
+  const trackingInfo = videoTracking[channelID];
+
+  let currentPartNumber = 1;
+  if (trackingInfo && trackingInfo.recentStreams.length > 0) {
+    // Look for any stream with matching ID - don't rely on exact timestamp match
+    const matchingStreams = trackingInfo.recentStreams.filter((stream) => stream.id === id);
+
+    if (matchingStreams.length > 0) {
+      // Use the first tracked instance of this stream ID
+      // The list is already sorted by startTime, so this preserves chronological order
+      const streamIndex = trackingInfo.recentStreams.indexOf(matchingStreams[0]);
+      currentPartNumber = streamIndex + 1;
+
+      console.log(`Found stream ${id} at position ${streamIndex}, part number: ${currentPartNumber}`);
+    } else {
+      // If stream wasn't tracked during /live, add it now with a current timestamp
+      console.log(`Stream ${id} wasn't tracked during /live, adding it now`);
+      const currentTime = new Date();
+      const uniqueKey = `${id}_${currentTime.getTime()}`;
+
+      trackingInfo.recentStreams.push({
+        startTime: currentTime,
+        id,
+        uniqueKey,
+      });
+      trackingInfo.recentStreams.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+      currentPartNumber = trackingInfo.recentStreams.findIndex((stream) => stream.id === id) + 1;
+    }
+  } else {
+    // If no tracking info exists, initialize it with current time
+    const currentTime = new Date();
+    const uniqueKey = `${id}_${currentTime.getTime()}`;
+
+    videoTracking[channelID] = {
+      recentStreams: [{
+        startTime: currentTime,
+        id,
+        uniqueKey,
+      }],
+    };
+  }
+  // --- End Modified Part Tracking Logic ---
+
   const timespampsFileExists = await exists(timestampPath, { isFile: true });
   !timespampsFileExists && await waitForFile(folderPath, timestampPath, "create", 5000);
   console.assert(timespampsFileExists, "timespamps file does not exist");
   const timespamps = timespampsFileExists ? sanitizeString(await Deno.readTextFile(timestampPath)) : "";
   const videoFileExists = await exists(videoPath, { isFile: true });
   console.assert(videoFileExists, "video file does not exist");
-  const title = makeTitle(date, infoFileData);
+  const title = makeTitle(date, infoFileData, currentPartNumber);
   // deno-fmt-ignore
   const description = `Recording of the twitch stream for the original experience\n` + 
                       `${infoFileData.title}\n`                                      + 
                       `\n${timespamps}\n`                                            + 
                       `VOD id: ${infoFileData.id}`;
   const videoInfo = {
-    title,
+    title, // Use the title generated by makeTitle
     description,
     videoPath,
     thumbnailPath: newThumbnailPath,
@@ -190,10 +297,13 @@ async function uploadVideoWithID({ channel, id }: requestData) {
     console.log(videoInfo);
     await makeThumbnail(date, thumbnailPath, newThumbnailPath);
     const successOrErrorMessage = upload(videoInfo);
-    successOrErrorMessage === true
-      ? sendSuccessNotification(metaJSONoutPath)
-      : sendErrorNotification(successOrErrorMessage);
-    successOrErrorMessage === true && DELETE_FLAG && await deleteVOD(id);
+    if (successOrErrorMessage === true) {
+      sendSuccessNotification(metaJSONoutPath);
+      DELETE_FLAG && await deleteVOD(id);
+    } else {
+      sendErrorNotification(successOrErrorMessage);
+      // Don't remove from tracking on failure - the video order is still valid
+    }
   }
 }
 
@@ -209,28 +319,42 @@ const requestBody = z.object({
 });
 
 export type requestData = z.infer<typeof requestBody.shape.body>;
-
 login();
-setInterval(login, 24 * 60 * 60 * 1000);
-
 Deno.serve({ port: 8080 }, async (req) => {
-  console.log("Method:", req.method);
   const url = new URL(req.url);
-  console.log("Path:", url.pathname);
-  console.log("Query parameters:", url.searchParams);
+  // Log request method, path, and query parameters together
+  console.log(`Received request: ${req.method} ${url.pathname}${url.search}`);
 
-  console.log("Headers:", req.headers);
+  // Headers logging removed for brevity, uncomment if needed for debugging
+  // console.log("Headers:", req.headers);
 
   if (req.body) {
-    const body = await req.json();
-    console.log(body);
+    try {
+      const body = await req.json();
+      console.log("Request body:", body); // Log the raw body
 
-    const { success, data } = requestBody.safeParse(body);
-    if (success) {
-      console.log(data);
-      makeTimestampsHandler(url.pathname, data.body);
-      if (url.pathname == "/offline") uploadVideoWithID(data.body);
+      const { success, data, error } = requestBody.safeParse(body); // Use safeParse
+      if (success) {
+        console.log("Validated data:", data.body); // Log the validated data
+        makeTimestampsHandler(url.pathname, data.body);
+        if (url.pathname == "/live") {
+          // Track the stream when it goes live
+          console.log(`Live event received for channel ${data.body.channelID}, video ${data.body.id}`);
+          trackLiveStream(data.body);
+        } else if (url.pathname == "/offline") {
+          uploadVideoWithID(data.body); // Pass the full data object
+        }
+      } else {
+        // Log validation errors
+        console.error("Request body validation failed:", error.issues);
+      }
+    } catch (e) {
+      console.error("Failed to parse request body as JSON:", e);
+      // Consider returning an error response, e.g.:
+      // return new Response("Invalid JSON body", { status: 400 });
     }
+  } else {
+    console.log("Request has no body.");
   }
   return new Response("ok");
 });
