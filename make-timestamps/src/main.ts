@@ -7,6 +7,8 @@ import { AppTokenAuthProvider } from "@twurple/auth";
 // Import EventSubSubscription type
 import { EventSubHttpListener, ReverseProxyAdapter } from "@twurple/eventsub-http";
 import { z } from "zod";
+import { generateTimestampsText } from "./generateTimestampsText.ts";
+import type { categoriesArray } from "./misc.ts";
 
 const CLIENT_ID = z.string().parse(Deno.env.get("CLIENT_ID"));
 const CLIENT_SECRET = z.string().parse(Deno.env.get("CLIENT_SECRET"));
@@ -54,17 +56,6 @@ const onlineSubscription = listener.onStreamOnline("83402203", (e) => {
   console.log(`${e.broadcasterDisplayName} just went live!`);
 });
 console.log(await onlineSubscription.getCliTestCommand());
-
-function toHHMMSS(secs: number): string {
-  const hours = Math.floor(secs / 3600);
-  const minutes = Math.floor(secs / 60) % 60;
-  const seconds = secs % 60;
-  return [hours, minutes, seconds]
-    .map((v) => v < 10 ? "0" + v : v)
-    .join(":");
-}
-
-type categoriesArray = { game: string; startTimestamp: Date; title: string }[];
 
 // --- Refactored State Management ---
 // Update Map type to store the actual subscription object
@@ -174,41 +165,26 @@ async function onStreamOffline(categoriesArray: categoriesArray, pathToSave: str
     return;
   }
   console.log(`Processing timestamps for path: ${pathToSave}`);
-  console.log("Categories recorded:", categoriesArray); // Log the array being processed
+  console.log("Categories recorded:", categoriesArray);
 
-  const first = categoriesArray[0];
-  let text = "";
-  for (const category of categoriesArray) {
-    // Ensure startTimestamp is valid before calculating difference
-    if (
-      !category.startTimestamp || !(category.startTimestamp instanceof Date) || isNaN(category.startTimestamp.getTime())
-    ) {
-      console.error(`Invalid startTimestamp found in category: ${JSON.stringify(category)} for path ${pathToSave}`);
-      continue; // Skip this entry
-    }
-    if (!first.startTimestamp || !(first.startTimestamp instanceof Date) || isNaN(first.startTimestamp.getTime())) {
-      console.error(`Invalid first startTimestamp found for path ${pathToSave}`);
-      text += `Error: Invalid start time - ${category.game} - ${category.title}\n`; // Indicate error in output
-      continue; // Skip this entry
-    }
-
-    const timeDiff = difference(first.startTimestamp, category.startTimestamp); // Note: order matters for difference
-    const seconds = Math.max(0, Math.floor((timeDiff.milliseconds ?? 0) / 1000)); // Ensure non-negative seconds
-    const timestamp = `${toHHMMSS(seconds)} ${category.game} - ${category.title}\n`;
-    text += timestamp;
-    console.log(`Timestamp generated: ${timestamp.trim()}`);
+  // Generate the timestamps text
+  const timestampsText = generateTimestampsText(categoriesArray);
+  if (!timestampsText) {
+    console.error(`Failed to generate timestamps for path: ${pathToSave}`);
+    return;
   }
 
   try {
     // Ensure directory exists before writing
     const dir = pathToSave.substring(0, pathToSave.lastIndexOf("/"));
     await Deno.mkdir(dir, { recursive: true });
-    await Deno.writeTextFile(pathToSave, text);
+    await Deno.writeTextFile(pathToSave, timestampsText);
     console.log(`Timestamps successfully written to ${pathToSave}`);
   } catch (error) {
     console.error(`Error writing timestamp file to ${pathToSave}:`, error);
   }
 }
+
 // --- End Refactored onStreamOffline ---
 
 async function handleExit() {
