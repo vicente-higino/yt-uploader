@@ -18,6 +18,7 @@
     "npm:@twurple/eventsub-http@^7.2.1": "7.2.1_@twurple+api@7.2.1__@twurple+auth@7.2.1_@twurple+auth@7.2.1",
     "npm:@twurple/eventsub-ngrok@^7.2.1": "7.2.1_@twurple+api@7.2.1__@twurple+auth@7.2.1_@twurple+eventsub-http@7.2.1__@twurple+api@7.2.1___@twurple+auth@7.2.1__@twurple+auth@7.2.1_@twurple+auth@7.2.1",
     "npm:@twurple/eventsub-ws@^7.2.1": "7.2.1_@twurple+api@7.2.1__@twurple+auth@7.2.1_@twurple+auth@7.2.1",
+    "npm:@twurple/pubsub@^7.2.1": "7.2.1_@twurple+auth@7.2.1",
     "npm:date-fns@^4.1.0": "4.1.0",
     "npm:fetch-cookie@^3.1.0": "3.1.0",
     "npm:tough-cookie@^5.1.0": "5.1.0",
@@ -297,6 +298,18 @@
         "tslib"
       ]
     },
+    "@twurple/pubsub@7.2.1_@twurple+auth@7.2.1": {
+      "integrity": "sha512-w8PQgPZNmfp5bDmH2z6VPqMlvTQtQFmZJrTqK6eMHYr6Wy5JzNVaO2m/C6QZZ4zG+gTqWCc2x5AgI5AA59sdiQ==",
+      "dependencies": [
+        "@d-fischer/connection",
+        "@d-fischer/logger",
+        "@d-fischer/shared-utils",
+        "@d-fischer/typed-event-emitter",
+        "@twurple/auth",
+        "@twurple/common",
+        "tslib"
+      ]
+    },
     "@types/express-serve-static-core@4.19.6": {
       "integrity": "sha512-N4LZ2xG7DatVqhCZzOGb1Yi5lMbXSZcmdLDe9EzSndPV2HpWYWzRbaerl2n27irrm94EPpprqa8KpskPT085+A==",
       "dependencies": [
@@ -484,7 +497,8 @@
             "npm:@twurple/auth@^7.2.1",
             "npm:@twurple/eventsub-http@^7.2.1",
             "npm:@twurple/eventsub-ngrok@^7.2.1",
-            "npm:@twurple/eventsub-ws@^7.2.1"
+            "npm:@twurple/eventsub-ws@^7.2.1",
+            "npm:@twurple/pubsub@^7.2.1"
           ]
         }
       }

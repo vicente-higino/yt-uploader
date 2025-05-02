@@ -4,6 +4,7 @@ import { difference } from "@std/datetime/difference";
 import { format } from "@std/fmt/duration";
 import { ApiClient } from "@twurple/api";
 import { AppTokenAuthProvider } from "@twurple/auth";
+// Import EventSubSubscription type
 import { EventSubHttpListener, ReverseProxyAdapter } from "@twurple/eventsub-http";
 import { z } from "zod";
 
@@ -20,7 +21,6 @@ DENO_ENV == "DEV" && assertExists(NGROK_AUTH_TOKEN, "missing NGROK_AUTH_TOKEN en
 const clientId = CLIENT_ID;
 const clientSecret = CLIENT_SECRET;
 const authProvider = new AppTokenAuthProvider(clientId, clientSecret);
-
 const apiClient = new ApiClient({ authProvider });
 
 await apiClient.eventSub.deleteAllSubscriptions();
@@ -47,7 +47,6 @@ const listener = new EventSubHttpListener({
   },
   secret: REVERSEPROXY_SECRET,
 });
-
 listener.start();
 
 const onlineSubscription = listener.onStreamOnline("83402203", (e) => {
@@ -67,70 +66,181 @@ function toHHMMSS(secs: number): string {
 
 type categoriesArray = { game: string; startTimestamp: Date; title: string }[];
 
-async function onStreamOnline(channelID: string, channelName: string, categoryArr: categoriesArray) {
-  const user = await apiClient.users.getUserById(channelID);
-  if (!user) {
-    console.log("no user found: ", channelName);
-    return;
-  }
-  const stream = await user.getStream();
-  if (!stream) {
-    console.log(`no stream found for user: ${user.displayName}`);
-    return;
-  }
-  console.log(user.id, user.displayName, stream?.title, stream?.gameName, stream?.viewers, stream?.startDate);
-  categoryArr.push({ game: stream?.gameName!, startTimestamp: new Date(), title: stream.title });
-  const sub = listener.onChannelUpdate(user.id, (e) => {
-    const date = new Date();
-    const last = categoryArr.at(-1);
-    if (last && (last.game !== e.categoryName || last.title !== e.streamTitle)) {
-      categoryArr.push({ game: e.categoryName, startTimestamp: new Date(), title: e.streamTitle });
-      console.log(
-        e.broadcasterDisplayName,
-        e.streamTitle,
-        e.categoryName,
-        date.toJSON(),
-        format(difference(last.startTimestamp!, date).milliseconds!, { ignoreZero: true }),
-      );
-    }
-  });
-  return sub;
-}
+// --- Refactored State Management ---
+// Update Map type to store the actual subscription object
+const channelUpdateSubscriptions = new Map<string, ReturnType<typeof listener.onChannelUpdate>>();
+type ActiveSession = {
+  queueId: string;
+  channelID: string;
+  channelName: string;
+  categoriesArray: categoriesArray;
+  path: string;
+};
+const activeSessions = new Map<string, ActiveSession>();
+// --- End Refactored State Management ---
 
-async function onStreamOffline(
-  categoriesArray: categoriesArray,
-  pathToSave: string,
-  onChannelUpdateID: Promise<ReturnType<typeof listener.onChannelUpdate> | undefined>,
-) {
-  console.log(categoriesArray);
-  const subID = await onChannelUpdateID;
-  subID && console.log("deleting subscription with id: ", subID.id);
-  subID && subID.stop();
+// --- New Function: Ensure Subscription ---
+async function ensureChannelUpdateSubscription(channelID: string) {
+  // Check if we have a subscription locally
+  if (channelUpdateSubscriptions.has(channelID)) {
+    const existingSub = channelUpdateSubscriptions.get(channelID)!;
+    let isApiActive = false;
+    try {
+      // Verify with the API if the subscription is still active among all enabled subscriptions
+      console.log(`Verifying status of subscription ${existingSub.id} for channel ${channelID} via API...`);
+      const enabledSubsPaginator = apiClient.eventSub.getSubscriptionsForStatusPaginated("enabled");
+      // Iterate through all pages of enabled subscriptions
+      for await (const apiSub of enabledSubsPaginator) {
+        console.log(`Checking subscription ID ${apiSub.id}...`);
+        if (apiSub.id === existingSub._twitchId) {
+          console.log(`Subscription ${existingSub._twitchId} for channel ${channelID} confirmed active via API.`);
+          isApiActive = true;
+          break; // Found the active subscription, no need to check further
+        }
+      }
+
+      if (isApiActive) {
+        return; // Subscription exists locally and is active on Twitch API
+      } else {
+        // If the loop finishes without finding the sub ID, it's not active
+        console.warn(
+          `Subscription ${existingSub.id} for channel ${channelID} found locally but is not listed as 'enabled' on Twitch API. Removing local entry.`,
+        );
+        // Attempt to stop the local listener instance if it exists, in case it's somehow orphaned
+        // try {
+        //   existingSub.stop();
+        //   // Add a 5-second delay
+        //   await new Promise((resolve) => setTimeout(resolve, 5000));
+        // } catch (stopError) {
+        //   console.error(`Error stopping potentially orphaned local subscription ${existingSub.id}:`, stopError);
+        // }
+        channelUpdateSubscriptions.delete(channelID);
+      }
+    } catch (error) {
+      console.error(
+        `Failed to verify subscription ${existingSub.id} status with API using getSubscriptionsForStatus for channel ${channelID}. Error: ${error}. Removing local entry.`,
+      );
+      channelUpdateSubscriptions.delete(channelID);
+    }
+  }
+
+  // If we reach here, either no local subscription exists or the existing one was invalid/inactive
+  console.log(`Creating ChannelUpdate subscription for ${channelID}`);
+  try {
+    // Await the creation and store the actual subscription object
+    const newSubscription = listener.onChannelUpdate(channelID, (e) => {
+      const date = new Date();
+      console.log(
+        `ChannelUpdate event for ${e.broadcasterDisplayName} (${e.broadcasterId}): Title='${e.streamTitle}', Category='${e.categoryName}'`,
+      );
+
+      // Find all active sessions for this channel and update their category arrays
+      for (const session of activeSessions.values()) {
+        if (session.channelID === e.broadcasterId) {
+          const last = session.categoriesArray.at(-1);
+          if (last && (last.game !== e.categoryName || last.title !== e.streamTitle)) {
+            session.categoriesArray.push({ game: e.categoryName, startTimestamp: date, title: e.streamTitle });
+            console.log(
+              `[${session.queueId}] Updated category for ${e.broadcasterDisplayName}: ${e.categoryName} - ${e.streamTitle}`,
+              `(${
+                format(difference(last.startTimestamp!, date).milliseconds!, { ignoreZero: true })
+              } since last change)`,
+            );
+          } else if (!last) {
+            // Should not happen if /live handler works correctly, but handle defensively
+            session.categoriesArray.push({ game: e.categoryName, startTimestamp: date, title: e.streamTitle });
+            console.warn(
+              `[${session.queueId}] Categories array was empty for ${e.broadcasterDisplayName}, added initial entry from update.`,
+            );
+          }
+        }
+      }
+    });
+    // Store the created subscription object
+    channelUpdateSubscriptions.set(channelID, newSubscription);
+    console.log(`ChannelUpdate subscription created for ${channelID} with ID: ${newSubscription.id}`);
+    console.log(await newSubscription.getCliTestCommand()); // Log test command for the new subscription
+  } catch (error) {
+    console.error(`Failed to create ChannelUpdate subscription for ${channelID}:`, error);
+    // Optionally re-throw or handle the error appropriately
+  }
+}
+// --- End New Function ---
+
+// --- Refactored onStreamOffline ---
+async function onStreamOffline(categoriesArray: categoriesArray, pathToSave: string) {
+  if (categoriesArray.length === 0) {
+    console.log(`No categories recorded for path: ${pathToSave}. Skipping file write.`);
+    return;
+  }
+  console.log(`Processing timestamps for path: ${pathToSave}`);
+  console.log("Categories recorded:", categoriesArray); // Log the array being processed
+
   const first = categoriesArray[0];
   let text = "";
   for (const category of categoriesArray) {
-    const time = difference(category.startTimestamp, first.startTimestamp).seconds!;
-    const timestamp = `${toHHMMSS(time)} ${category.game} - ${category.title}\n`;
-    text += timestamp;
-    console.log(timestamp);
-  }
-  Deno.writeTextFile(pathToSave, text);
-}
+    // Ensure startTimestamp is valid before calculating difference
+    if (
+      !category.startTimestamp || !(category.startTimestamp instanceof Date) || isNaN(category.startTimestamp.getTime())
+    ) {
+      console.error(`Invalid startTimestamp found in category: ${JSON.stringify(category)} for path ${pathToSave}`);
+      continue; // Skip this entry
+    }
+    if (!first.startTimestamp || !(first.startTimestamp instanceof Date) || isNaN(first.startTimestamp.getTime())) {
+      console.error(`Invalid first startTimestamp found for path ${pathToSave}`);
+      text += `Error: Invalid start time - ${category.game} - ${category.title}\n`; // Indicate error in output
+      continue; // Skip this entry
+    }
 
-function makeTimestamps(id: string, channelID: string, channelName: string) {
-  const path = `/vods/${channelName.toLowerCase()}/${id}/${id}-timestamps.txt`;
-  const categoriesArray: categoriesArray = [];
-  const onUpdateSubID = onStreamOnline(channelID, channelName, categoriesArray);
-  return () => onStreamOffline(categoriesArray, path, onUpdateSubID);
+    const timeDiff = difference(first.startTimestamp, category.startTimestamp); // Note: order matters for difference
+    const seconds = Math.max(0, Math.floor((timeDiff.milliseconds ?? 0) / 1000)); // Ensure non-negative seconds
+    const timestamp = `${toHHMMSS(seconds)} ${category.game} - ${category.title}\n`;
+    text += timestamp;
+    console.log(`Timestamp generated: ${timestamp.trim()}`);
+  }
+
+  try {
+    // Ensure directory exists before writing
+    const dir = pathToSave.substring(0, pathToSave.lastIndexOf("/"));
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(pathToSave, text);
+    console.log(`Timestamps successfully written to ${pathToSave}`);
+  } catch (error) {
+    console.error(`Error writing timestamp file to ${pathToSave}:`, error);
+  }
 }
+// --- End Refactored onStreamOffline ---
 
 async function handleExit() {
-  console.log("stopping...");
-  // for (const func of Object.values(onOffline)) {
-  //   await func();
-  // }
-  await Promise.all(Object.values(onOffline).map((f) => f()));
-  listener.stop();
+  console.log("Stopping...");
+
+  // Process remaining active sessions
+  console.log(`Processing ${activeSessions.size} remaining active sessions before exit...`);
+  const offlinePromises = [];
+  for (const session of activeSessions.values()) {
+    console.log(`Triggering offline processing for session: ${session.queueId}`);
+    offlinePromises.push(onStreamOffline(session.categoriesArray, session.path));
+  }
+  await Promise.all(offlinePromises);
+  activeSessions.clear(); // Clear sessions after processing
+
+  // Stop channel update subscriptions stored in the map
+  console.log(`Stopping ${channelUpdateSubscriptions.size} channel update subscriptions...`);
+  const stopPromises = [];
+  for (const [channelID, sub] of channelUpdateSubscriptions.entries()) {
+    // sub is now the EventSubSubscription object
+    console.log(`Stopping subscription for channel ${channelID} (ID: ${sub.id})`);
+    // Use the stop method directly on the subscription object
+    stopPromises.push(sub.stop());
+  }
+  await Promise.all(stopPromises);
+  channelUpdateSubscriptions.clear();
+
+  // Stop the main listener
+  console.log("Stopping main EventSub listener...");
+  await listener.stop(); // Ensure listener stop is awaited if it's async
+
+  console.log("Cleanup complete. Exiting.");
   Deno.exit();
 }
 
@@ -138,17 +248,74 @@ Deno.addSignalListener("SIGINT", handleExit);
 Deno.addSignalListener("SIGTERM", handleExit);
 Deno.addSignalListener("SIGQUIT", handleExit);
 
-const onOffline: { [chanellID: string]: ReturnType<typeof makeTimestamps> } = {};
-export const makeTimestampsHandler = (pathname: string, data: requestData) => {
+export const makeTimestampsHandler = async (pathname: string, data: requestData) => {
+  console.log(`Received request: ${pathname} with data:`, data);
+
   if (pathname === "/live") {
-    console.log(data);
-    onOffline[data.queueId] = makeTimestamps(data.id, data.channelID, data.channel);
-  }
-  if (pathname === "/offline") {
-    console.log(data);
-    if (data.queueId in onOffline) {
-      onOffline[data.queueId]();
-      delete onOffline[data.queueId];
+    if (activeSessions.has(data.queueId)) {
+      console.warn(`Session with queueId ${data.queueId} already exists. Ignoring duplicate /live request.`);
+      return;
     }
+
+    try {
+      // Ensure the channel update listener is running for this channel
+      await ensureChannelUpdateSubscription(data.channelID);
+
+      // Fetch initial stream state
+      const user = await apiClient.users.getUserById(data.channelID);
+      if (!user) {
+        console.error(`Could not find user for channel ID: ${data.channelID}`);
+        return;
+      }
+      const stream = await user.getStream();
+      if (!stream) {
+        console.warn(
+          `User ${user.displayName} (${data.channelID}) is not currently live. Cannot start timestamping session ${data.queueId}.`,
+        );
+        // Optionally, you could still create the session but with an empty array,
+        // relying on the ChannelUpdate event to populate it if they go live later.
+        // However, the current logic assumes they are live when /live is called.
+        return;
+      }
+
+      console.log(
+        `Starting timestamp session ${data.queueId} for ${user.displayName}. Initial state: Game='${stream.gameName}', Title='${stream.title}'`,
+      );
+
+      // Create the initial categories array for this session
+      const categoriesArray: categoriesArray = [
+        { game: stream.gameName, startTimestamp: new Date(), title: stream.title },
+      ];
+
+      // Define the path for the timestamp file
+      const path = `/vods/${data.channel.toLowerCase()}/${data.id}/${data.id}-timestamps.txt`;
+
+      // Store the active session data
+      activeSessions.set(data.queueId, {
+        queueId: data.queueId,
+        channelID: data.channelID,
+        channelName: data.channel,
+        categoriesArray: categoriesArray,
+        path: path,
+      });
+
+      console.log(`Active session ${data.queueId} started for ${data.channel}. Path: ${path}`);
+    } catch (error) {
+      console.error(`Error processing /live request for queueId ${data.queueId}:`, error);
+    }
+  } else if (pathname === "/offline") {
+    const session = activeSessions.get(data.queueId);
+    if (session) {
+      console.log(`Processing /offline for session: ${data.queueId}`);
+      // Process the collected data and write the file
+      await onStreamOffline(session.categoriesArray, session.path);
+      // Remove the session from active tracking
+      activeSessions.delete(data.queueId);
+      console.log(`Session ${data.queueId} finished and removed.`);
+    } else {
+      console.warn(`Received /offline for unknown or already processed queueId: ${data.queueId}`);
+    }
+  } else {
+    console.log(`Unknown pathname received: ${pathname}`);
   }
 };
