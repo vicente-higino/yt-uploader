@@ -15,7 +15,7 @@ function truncateString(
   const currentLength = getStrLength(str);
   if (currentLength > maxLength) {
     // Keep 3 characters for "..."
-    return strSlice(str, Math.max(0, maxLength - 3)) + "...";
+    return strSlice(str, Math.max(0, maxLength - 1)) + "…";
   }
   return str;
 }
