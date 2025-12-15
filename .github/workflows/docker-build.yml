@@ -1,0 +1,178 @@
+name: Docker Build & Publish
+
+on:
+  push:
+    branches: ["main"]
+    # Publish semver tags as releases.
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  OCI_IMAGE_NAME: ""
+  OCI_PUSH: ${{ vars.OCI_PUSH }}
+
+jobs:
+  build:
+    name: Build OCI Images
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: amd64
+            platform: linux/amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux/arm64
+    steps:
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - name: Set correct OCI image name
+        id: ociImageName
+        run: echo "::set-output name=lowerCaseValue::${OCI_IMAGE_NAME,,}"
+        env:
+          OCI_IMAGE_NAME: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # Checkout the repo
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Show git version info
+        run: |
+          echo "git describe (dirty): $(git describe --dirty --always --tags)"
+          echo "git describe --tags: $(git describe --tags `git rev-list --tags --max-count=1`)"
+          echo "git tag: $(git tag --sort=-committerdate | head -n 1)"
+          echo "github_ref: $GITHUB_REF"
+          echo "github_head_sha: ${{ github.event.pull_request.head.sha }}"
+          git tag -l
+
+      - name: Determine git current SHA and latest tag
+        id: git-version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            GIT_TAG=${GITHUB_REF#refs/tags/}
+          elif [[ "$GITHUB_REF" == refs/pull/* ]]; then
+            PR_NUMBER=$(echo "$GITHUB_REF" | awk -F'/' '{print $3}')
+            GIT_TAG="pr-${PR_NUMBER}"
+          else
+            GIT_TAG="dev"
+          fi
+          echo "GIT_TAG=$GIT_TAG" >> "$GITHUB_OUTPUT"
+
+          GIT_SHA=$(git rev-parse --short HEAD)
+          echo "GIT_SHA=$GIT_SHA" >> $GITHUB_OUTPUT
+
+          echo "GIT_TAG=$GIT_TAG"
+          echo "GIT_SHA=$GIT_SHA"
+
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Extract metadata (tags, labels) for Docker
+      - name: Extract Docker metadata (release)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # Login into GitHub Container Registry (only if OCI_PUSH is true and not run by Dependabot)
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        if: env.OCI_PUSH == 'true' && github.actor != 'dependabot[bot]'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          push: ${{ env.OCI_PUSH == 'true' && github.actor != 'dependabot[bot]' }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          outputs: type=image,"name=${{ steps.ociImageName.outputs.lowerCaseValue }}",push-by-digest=true,name-canonical=true
+          build-args: |
+            GIT_TAG=${{ steps.git-version.outputs.GIT_TAG }}
+            GIT_SHA=${{ steps.git-version.outputs.GIT_SHA }}
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v5
+        if: env.OCI_PUSH == 'true' && github.actor != 'dependabot[bot]'
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    if: vars.OCI_PUSH == 'true' && github.actor != 'dependabot[bot]'
+    needs:
+      - build
+    concurrency:
+      group: ${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Set correct OCI image name
+        id: ociImageName
+        run: |
+          echo "lowerCaseValue=${OCI_IMAGE_NAME,,}" >> $GITHUB_OUTPUT
+        env:
+          OCI_IMAGE_NAME: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v6
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        if: github.actor != 'dependabot[bot]'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ steps.ociImageName.outputs.lowerCaseValue }}
+          tags: |
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=raw,value=dev,enable={{is_default_branch}}
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ steps.ociImageName.outputs.lowerCaseValue }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ steps.ociImageName.outputs.lowerCaseValue }}:${{ steps.meta.outputs.version }}
