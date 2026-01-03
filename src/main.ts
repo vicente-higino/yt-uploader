@@ -284,9 +284,9 @@ async function uploadVideoWithID({ channel, id, channelID }: requestData) {
   // deno-fmt-ignore
   const description =
     `Help support the channel: https://ko-fi.com/fuslietwitchvodswithmusic \n\n` +
-    `[Full Title]\n` +
+    `[FULL TITLE]\n` +
     `${infoFileData.title}\n\n` +
-    `[Timestamps]\n` +
+    `[TIMESTAMPS]\n` +
     `${timestamps}\n` +
     `VOD id: ${infoFileData.id}\n`;
   const videoInfo = {
