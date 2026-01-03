@@ -1,10 +1,10 @@
 function getStrLength(str: string): number {
-  return [...new Intl.Segmenter().segment(str)].length;
+  return [...str].length;
 }
 
 function strSlice(str: string, to: number): string {
-  return [...new Intl.Segmenter().segment(str)].filter((_x, i) => i < to).map(
-    (x) => x.segment,
+  return [...str].filter((_x, i) => i < to).map(
+    (x) => x,
   ).join("");
 }
 
@@ -14,7 +14,7 @@ function truncateString(
 ) {
   const currentLength = getStrLength(str);
   if (currentLength > maxLength) {
-    // Keep 3 characters for "..."
+    // Keep 1 characters for "…"
     return strSlice(str, Math.max(0, maxLength - 1)) + "…";
   }
   return str;
