@@ -1,4 +1,4 @@
-import { check_live, DENO_ENV, type requestData } from "@scope/main";
+import { check_live, DENO_ENV, DISCORD_WEBHOOK_URL, type requestData } from "@scope/main";
 import { assertExists } from "@std/assert/exists";
 import { difference } from "@std/datetime/difference";
 import { format } from "@std/fmt/duration";
@@ -19,6 +19,7 @@ DENO_ENV == "PROD" && assertExists(REVERSEPROXY_PORT, "missing REVERSEPROXY_PORT
 const REVERSEPROXY_SECRET = z.string().parse(Deno.env.get("REVERSEPROXY_SECRET"));
 const NGROK_AUTH_TOKEN = z.string().optional().parse(Deno.env.get("NGROK_AUTH_TOKEN"));
 DENO_ENV == "DEV" && assertExists(NGROK_AUTH_TOKEN, "missing NGROK_AUTH_TOKEN env");
+const CHANNELS_IDS = z.string().parse(Deno.env.get("CHANNELS_IDS")).split(",").map((id) => id.trim());
 
 const clientId = CLIENT_ID;
 const clientSecret = CLIENT_SECRET;
@@ -51,11 +52,19 @@ const listener = new EventSubHttpListener({
 });
 listener.start();
 
-const onlineSubscription = listener.onStreamOnline("83402203", (e) => {
-  check_live();
-  console.log(`${e.broadcasterDisplayName} just went live!`);
-});
-console.log(await onlineSubscription.getCliTestCommand());
+// Subscribe to onStreamOnline events for all configured channels
+for (const channelID of CHANNELS_IDS) {
+  try {
+    const onlineSubscription = listener.onStreamOnline(channelID, (e) => {
+      check_live();
+      console.log(`${e.broadcasterDisplayName} just went live!`);
+    });
+    ensureChannelUpdateSubscription(channelID);
+    console.log(await onlineSubscription.getCliTestCommand());
+  } catch (error) {
+    console.error(`Failed to subscribe to stream online event for channel ${channelID}:`, error);
+  }
+}
 
 // --- Refactored State Management ---
 // Update Map type to store the actual subscription object
@@ -69,6 +78,52 @@ type ActiveSession = {
 };
 const activeSessions = new Map<string, ActiveSession>();
 // --- End Refactored State Management ---
+
+// --- Discord Notification Function ---
+async function sendChannelUpdateNotification(
+  username: string,
+  displayName: string,
+  categoryName: string,
+  streamTitle: string,
+  pictureUrl: string,
+) {
+  if (!DISCORD_WEBHOOK_URL) {
+    console.warn("DISCORD_WEBHOOK_URL not configured, skipping notification");
+    return;
+  }
+
+  try {
+    const options = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "content": `@here, **${displayName}** - Channel Update (Offline)`,
+        "embeds": [
+          {
+            "title": `${streamTitle} - ${categoryName}`,
+            "author": {
+              "name": username,
+              "icon_url": pictureUrl,
+              "url": `https://twitch.tv/${username}`,
+            },
+            "color": 16772352,
+            "url": `https://twitch.tv/${username}`,
+          },
+        ],
+      }),
+    };
+
+    const response = await fetch(DISCORD_WEBHOOK_URL, options);
+    if (!response.ok) {
+      console.error(`Failed to send Discord notification: ${response.status} ${response.statusText}`);
+    }
+  } catch (error) {
+    console.error("Error sending Discord notification:", error);
+  }
+}
+// --- End Discord Notification Function ---
 
 // --- New Function: Ensure Subscription ---
 async function ensureChannelUpdateSubscription(channelID: string) {
@@ -119,27 +174,39 @@ async function ensureChannelUpdateSubscription(channelID: string) {
   console.log(`Creating ChannelUpdate subscription for ${channelID}`);
   try {
     // Await the creation and store the actual subscription object
-    const newSubscription = listener.onChannelUpdate(channelID, (e) => {
+    const newSubscription = listener.onChannelUpdate(channelID, async (e) => {
       const date = new Date();
       console.log(
         `ChannelUpdate event for ${e.broadcasterDisplayName} (${e.broadcasterId}): Title='${e.streamTitle}', Category='${e.categoryName}'`,
       );
-
+      const streamer = await e.getBroadcaster();
+      const stream = await streamer.getStream();
+      if (!stream) {
+        sendChannelUpdateNotification(
+          e.broadcasterName,
+          e.broadcasterDisplayName,
+          e.categoryName,
+          e.streamTitle,
+          streamer.profilePictureUrl,
+        );
+        return;
+      }
+      const { title, game } = stream;
       // Find all active sessions for this channel and update their category arrays
       for (const session of activeSessions.values()) {
         if (session.channelID === e.broadcasterId) {
           const last = session.categoriesArray.at(-1);
-          if (last && (last.game !== e.categoryName || last.title !== e.streamTitle)) {
-            session.categoriesArray.push({ game: e.categoryName, startTimestamp: date, title: e.streamTitle });
+          if (last && (last.game !== game || last.title !== title)) {
+            session.categoriesArray.push({ game, startTimestamp: date, title });
             console.log(
-              `[${session.queueId}] Updated category for ${e.broadcasterDisplayName}: ${e.categoryName} - ${e.streamTitle}`,
+              `[${session.queueId}] Updated category for ${e.broadcasterDisplayName}: ${title} - ${game}`,
               `(${
                 format(difference(last.startTimestamp!, date).milliseconds!, { ignoreZero: true })
               } since last change)`,
             );
           } else if (!last) {
             // Should not happen if /live handler works correctly, but handle defensively
-            session.categoriesArray.push({ game: e.categoryName, startTimestamp: date, title: e.streamTitle });
+            session.categoriesArray.push({ game, startTimestamp: date, title });
             console.warn(
               `[${session.queueId}] Categories array was empty for ${e.broadcasterDisplayName}, added initial entry from update.`,
             );
@@ -255,12 +322,12 @@ export const makeTimestampsHandler = async (pathname: string, data: requestData)
       }
 
       console.log(
-        `Starting timestamp session ${data.queueId} for ${user.displayName}. Initial state: Game='${stream.gameName}', Title='${stream.title}'`,
+        `Starting timestamp session ${data.queueId} for ${user.displayName}. Initial state: Game='${stream.game}', Title='${stream.title}'`,
       );
 
       // Create the initial categories array for this session
       const categoriesArray: categoriesArray = [
-        { game: stream.gameName, startTimestamp: new Date(), title: stream.title },
+        { game: stream.game, startTimestamp: new Date(), title: stream.title },
       ];
 
       // Define the path for the timestamp file
