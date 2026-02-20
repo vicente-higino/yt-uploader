@@ -52,20 +52,6 @@ const listener = new EventSubHttpListener({
 });
 listener.start();
 
-// Subscribe to onStreamOnline events for all configured channels
-for (const channelID of CHANNELS_IDS) {
-  try {
-    const onlineSubscription = listener.onStreamOnline(channelID, (e) => {
-      check_live();
-      console.log(`${e.broadcasterDisplayName} just went live!`);
-    });
-    ensureChannelUpdateSubscription(channelID);
-    console.log(await onlineSubscription.getCliTestCommand());
-  } catch (error) {
-    console.error(`Failed to subscribe to stream online event for channel ${channelID}:`, error);
-  }
-}
-
 // --- Refactored State Management ---
 // Update Map type to store the actual subscription object
 const channelUpdateSubscriptions = new Map<string, ReturnType<typeof listener.onChannelUpdate>>();
@@ -361,3 +347,17 @@ export const makeTimestampsHandler = async (pathname: string, data: requestData)
     console.log(`Unknown pathname received: ${pathname}`);
   }
 };
+
+// Subscribe to onStreamOnline events for all configured channels
+for (const channelID of CHANNELS_IDS) {
+  try {
+    const onlineSubscription = listener.onStreamOnline(channelID, (e) => {
+      check_live();
+      console.log(`${e.broadcasterDisplayName} just went live!`);
+    });
+    ensureChannelUpdateSubscription(channelID);
+    console.log(await onlineSubscription.getCliTestCommand());
+  } catch (error) {
+    console.error(`Failed to subscribe to stream online event for channel ${channelID}:`, error);
+  }
+}
