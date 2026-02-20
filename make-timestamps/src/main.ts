@@ -191,7 +191,7 @@ async function ensureChannelUpdateSubscription(channelID: string) {
         );
         return;
       }
-      const { title, game } = stream;
+      const { title, gameName: game } = stream;
       // Find all active sessions for this channel and update their category arrays
       for (const session of activeSessions.values()) {
         if (session.channelID === e.broadcasterId) {
@@ -200,8 +200,7 @@ async function ensureChannelUpdateSubscription(channelID: string) {
             session.categoriesArray.push({ game, startTimestamp: date, title });
             console.log(
               `[${session.queueId}] Updated category for ${e.broadcasterDisplayName}: ${title} - ${game}`,
-              `(${
-                format(difference(last.startTimestamp!, date).milliseconds!, { ignoreZero: true })
+              `(${format(difference(last.startTimestamp!, date).milliseconds!, { ignoreZero: true })
               } since last change)`,
             );
           } else if (!last) {
@@ -322,12 +321,12 @@ export const makeTimestampsHandler = async (pathname: string, data: requestData)
       }
 
       console.log(
-        `Starting timestamp session ${data.queueId} for ${user.displayName}. Initial state: Game='${stream.game}', Title='${stream.title}'`,
+        `Starting timestamp session ${data.queueId} for ${user.displayName}. Initial state: Game='${stream.gameName}', Title='${stream.title}'`,
       );
 
       // Create the initial categories array for this session
       const categoriesArray: categoriesArray = [
-        { game: stream.game, startTimestamp: new Date(), title: stream.title },
+        { game: stream.gameName, startTimestamp: new Date(), title: stream.title },
       ];
 
       // Define the path for the timestamp file
