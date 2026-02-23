@@ -165,9 +165,9 @@ async function ensureChannelUpdateSubscription(channelID: string) {
       console.log(
         `ChannelUpdate event for ${e.broadcasterDisplayName} (${e.broadcasterId}): Title='${e.streamTitle}', Category='${e.categoryName}'`,
       );
-      const streamer = await e.getBroadcaster();
-      const stream = await streamer.getStream();
+      const stream = await apiClient.streams.getStreamByUserId(e.broadcasterId);
       if (!stream) {
+        const streamer = await e.getBroadcaster();
         sendChannelUpdateNotification(
           e.broadcasterName,
           e.broadcasterDisplayName,
@@ -175,9 +175,8 @@ async function ensureChannelUpdateSubscription(channelID: string) {
           e.streamTitle,
           streamer.profilePictureUrl,
         );
-        return;
       }
-      const { title, gameName: game } = stream;
+      const { streamTitle: title, categoryName: game } = e;
       // Find all active sessions for this channel and update their category arrays
       for (const session of activeSessions.values()) {
         if (session.channelID === e.broadcasterId) {
