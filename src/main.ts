@@ -8,28 +8,29 @@ import { makeTitle } from "./makeTitle.ts";
 import type { videoUploadInfo } from "./videoUploadInfo.ts";
 import { DELETE_FLAG, DISCORD_WEBHOOK_URL } from "./env.ts";
 
-async function waitForFile(
+function waitForFile(
   path: string,
   file: string,
   kind: "any" | "access" | "create" | "modify" | "rename" | "remove" | "other",
   timeout = 60000,
 ) {
-  console.log("Waiting for file: ", file, kind, timeout);
-  const watcher = Deno.watchFs(path);
-  const timeoutID = setTimeout(() => {
-    watcher.close();
-  }, timeout);
-  for await (const event of watcher) {
-    if (event.kind == kind && (new Set(event.paths)).has(file)) {
-      watcher.close();
-      clearTimeout(timeoutID);
-    }
-  }
+  console.log("Waiting for file: ", path, file, kind, timeout);
+  // const watcher = Deno.watchFs(path);
+  // const timeoutID = setTimeout(() => {
+  //   watcher.close();
+  // }, timeout);
+  // for await (const event of watcher) {
+  //   if (event.kind == kind && (new Set(event.paths)).has(file)) {
+  //     watcher.close();
+  //     clearTimeout(timeoutID);
+  //   }
+  // }
+  return new Promise((resolve) => setTimeout(resolve, timeout));
 }
 
 async function makeThumbnail(text: string, path: string, outputPath: string) {
   console.log("waiting for thumbnail to update... ⏳");
-  await waitForFile(path, path, "modify", 10000);
+  await waitForFile(path, path, "modify", 30000);
   console.log("creating thumbnail", text, path, outputPath);
   const command = new Deno.Command("ffmpeg", {
     args: [
